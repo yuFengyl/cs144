@@ -15,12 +15,15 @@ class StreamReassembler {
 
     ByteStream _output;  //!< The reassembled in-order byte stream
     size_t _capacity;    //!< The maximum number of bytes
-    std::map<size_t, std::string> _unassembled_string; // 注意 _unassembled_string 所指向的 index 是还没被装配的
-    size_t _first_unassembled_index; // 注意 _first_unassembled_index 所指向的 index 是还没被装配的
+    std::map<size_t, char> _unassembled_string;
+    size_t _first_unassembled_index;
+    size_t _unassembled_length;
+    bool _eof_flag;
     size_t _eof_index;
-    size_t _eof_flag;
 
-    void assemble_string();
+    void put_into_map(std::string data, size_t index);
+
+    void assemble_string_in_map();
 
   public:
     //! \brief Construct a `StreamReassembler` that will store up to `capacity` bytes.
