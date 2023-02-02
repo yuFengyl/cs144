@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <queue>
+#include <utility>
 
 //! \brief The "sender" part of a TCP implementation.
 
@@ -17,6 +18,11 @@
 //! segments if the retransmission timer expires.
 class TCPSender {
   private:
+    struct sender_in_queue{
+        TCPSegment seg;
+        size_t abs_seqno;
+        sender_in_queue(TCPSegment s, size_t a): seg(std::move(s)), abs_seqno(a){}
+    };
     //! our initial sequence number, the number for our SYN.
     WrappingInt32 _isn;
 
@@ -32,6 +38,31 @@ class TCPSender {
     //! the (absolute) sequence number for the next byte to be sent
     uint64_t _next_seqno{0};
 
+    // 从接收方收到的确认号
+    uint64_t _abs_ackno{0};
+
+    // 当前的 RTO
+    unsigned int _retransmission_timeout;
+
+    // 用于记录每一个可能需要重传的 segment
+    std::queue<sender_in_queue> _segment_sent{};
+
+    // 重传次数
+    unsigned int _consecutive_retransmissions{0};
+
+    // 重传计时器是否启动
+    bool _timer_flag{false};
+
+    // 重传计时器
+    unsigned int _timer{0};
+
+    // 接收方的窗口大小，这里初始化为 1 是 debug 出来的，具体我也不知道为啥
+    uint16_t _window_size{1};
+
+    bool _syn_flag{false};
+    bool _fin_flag{false};
+
+    void send_segment(TCPSegment seg);
   public:
     //! Initialize a TCPSender
     TCPSender(const size_t capacity = TCPConfig::DEFAULT_CAPACITY,

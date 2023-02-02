@@ -125,6 +125,8 @@ functional
 -
 queue
 -
+utility
+-
 
 ../libsponge/util/address.hh
 cstddef
