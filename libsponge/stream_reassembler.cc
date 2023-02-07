@@ -1,5 +1,4 @@
 #include "stream_reassembler.hh"
-#include <iostream>
 
 // Dummy implementation of a stream reassembler.
 
@@ -13,82 +12,89 @@ void DUMMY_CODE(Targs &&... /* unused */) {}
 
 using namespace std;
 
-StreamReassembler::StreamReassembler(const size_t capacity) :
-    _output(capacity), _capacity(capacity), _unassembled_string(), _first_unassembled_index(0),
-    _unassembled_length(0), _eof_flag(false), _eof_index(0){}
+StreamReassembler::StreamReassembler(const size_t capacity) : _output(capacity), _capacity(capacity) {}
 
-void StreamReassembler::put_into_map(string data, size_t index) {
-    for (unsigned long i=0; i<data.length(); i++){
-        _unassembled_string.insert({index+i, data[i]});
+// size_t是标准C库中定义的，它是一个基本的与机器相关的无符号整数的C/C + +类型, 而这里要返回有符号数 -1 ，因此应该为 long
+long StreamReassembler::merge_node(block &t1, const block &t2) {
+    block front, back;
+    if (t1.begin > t2.begin) {
+        front = t2;
+        back = t1;
+    } else {
+        front = t1;
+        back = t2;
     }
-    _unassembled_length = _unassembled_string.size();
+    if (front.begin + front.data.length() < back.begin) {
+        return -1;  // no intersection, couldn't merge
+    } else if (front.begin + front.data.length() >= back.begin + back.data.length()) {
+        t1 = front;
+        return back.data.length();
+    } else {
+        t1.begin = front.begin;
+        t1.data = front.data + back.data.substr(front.begin + front.data.length() - back.begin);
+        return front.begin + front.data.length() - back.begin;
+    }
 }
 
-void StreamReassembler::assemble_string_in_map() {
-    string s = string();
-    size_t last_index = _first_unassembled_index-1;
-    for (auto iter = _unassembled_string.begin(); iter != _unassembled_string.end(); ){
-        if(iter->first < _first_unassembled_index){
-            iter = _unassembled_string.erase(iter);
-        }
-        else{
-            if (last_index + 1 == iter->first){
-                s.push_back(iter->second);
-                last_index = iter->first;
-                iter = _unassembled_string.erase(iter);
-            }
-            else
-                break;
-        }
-    }
-    size_t written_bytes = _output.write(s);
-    _first_unassembled_index += written_bytes;
-    _unassembled_length = _unassembled_string.size();
-}
-
-    //! \details This function accepts a substring (aka a segment) of bytes,
+//! \details This function accepts a substring (aka a segment) of bytes,
 //! possibly out-of-order, from the logical stream, and assembles any newly
 //! contiguous substrings and writes them into the output stream in order.
 void StreamReassembler::push_substring(const string &data, const size_t index, const bool eof) {
-    if (eof){
-        _eof_flag = eof;
-        _eof_index = data.length() + index;
+    if (index >= _first_unassembled_index + _output.remaining_capacity())
+        return ;
+    if (eof) {
+        _eof = true;
     }
-    assemble_string_in_map();
-    size_t unassembled_length = _output.remaining_capacity();
-    if (index == _first_unassembled_index){
-        if (data.length() <= unassembled_length){ // we can write all data into ByteStream
-            _output.write(data);
-            _first_unassembled_index += data.length();
-            assemble_string_in_map();
+    block node;
+    if (index + data.length() <= _first_unassembled_index){
+        if (_eof && empty()) {
+            _output.end_input();
         }
-        else {  // we can not write all data into ByteStream, it needs to be cut
-            string temp = data.substr(0, unassembled_length);
-            _output.write(temp);
-            _first_unassembled_index += temp.length();
-        }
+        return ;
     }
-    else if (index < _first_unassembled_index) {
-        if (index + data.length() <= _first_unassembled_index)
-            return ;
-        push_substring(data.substr(_first_unassembled_index - index), _first_unassembled_index, eof);
+    else if (index < _first_unassembled_index){
+        node.data.assign(data.begin() + _first_unassembled_index - index, data.end());
+        node.begin = _first_unassembled_index;
     }
     else{
-        if (index >= _first_unassembled_index + unassembled_length)
-            return ;
-        else {
-            string data_cut = data;
-            if (data.length() + index > _first_unassembled_index + unassembled_length)
-                data_cut = data_cut.substr(0, _first_unassembled_index - unassembled_length - index);
-            put_into_map(data_cut, index);
+        node.begin = index;
+        node.data = data;
+    }
+    _unassembled_byte += node.data.length();
+    long merge_bytes;
+    auto iter = _blocks.lower_bound(node);
+    // 下面这里第二个判断条件应该是 大于等于0 ，因为两个 node 也可能相邻但并不相交
+    while (iter != _blocks.end() && (merge_bytes = merge_node(node, *iter)) >= 0) {
+        _unassembled_byte -= merge_bytes;
+        _blocks.erase(iter);
+        iter = _blocks.lower_bound(node);
+    }
+    iter = _blocks.lower_bound(node);
+    if (iter != _blocks.begin()){ // 确保下面的操作不会发生错误
+        iter--;
+        // 这里不能有 iter != _blocks.begin() 这个判断条件，因为也有可能出现需要和 set 中第一个元素合并的情况
+        while ((merge_bytes = merge_node(node, *iter)) >= 0){
+            _unassembled_byte -= merge_bytes;
+            _blocks.erase(iter);
+            iter = _blocks.lower_bound(node);
+            if (iter == _blocks.begin())
+                break;
+            iter--;
         }
     }
-    if (_eof_flag == true && _eof_index <= _first_unassembled_index) {
-        cout << "EOF EXECUTED" << "data: " << data << endl;
+    _blocks.insert(node);
+    if (!_blocks.empty() && _blocks.begin()->begin == _first_unassembled_index) {
+        iter = _blocks.begin();
+        size_t write_bytes = _output.write((iter->data));
+        _first_unassembled_index += write_bytes;
+        _unassembled_byte -= write_bytes;
+        _blocks.erase(iter);
+    }
+    if (_eof && empty()) {
         _output.end_input();
     }
 }
 
-size_t StreamReassembler::unassembled_bytes() const { return _unassembled_length; }
+size_t StreamReassembler::unassembled_bytes() const { return _unassembled_byte; }
 
-bool StreamReassembler::empty() const { return _unassembled_length == 0; }
+bool StreamReassembler::empty() const { return unassembled_bytes() == 0; }
