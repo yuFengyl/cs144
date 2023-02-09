@@ -23,9 +23,14 @@ class TCPConnection {
 
     size_t _time_since_last_segment_received{0};
 
-    bool _active{false};
+    // TODO ??????????
+    bool _active{true};
 
     void add_ackno_and_window_size();
+
+    void set_error_state();
+
+    void send_rst_segment();
 
   public:
     //! \name "Input" interface for the writer

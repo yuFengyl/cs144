@@ -20,7 +20,49 @@ size_t TCPConnection::unassembled_bytes() const { return _receiver.unassembled_b
 
 size_t TCPConnection::time_since_last_segment_received() const { return _time_since_last_segment_received; }
 
-void TCPConnection::segment_received(const TCPSegment &seg) { DUMMY_CODE(seg); }
+void TCPConnection::segment_received(const TCPSegment &seg) {
+    if (TCPState::state_summary(_receiver) == TCPReceiverStateSummary::LISTEN &&
+        TCPState::state_summary(_sender) == TCPSenderStateSummary::CLOSED &&
+        seg.header().syn == false) {
+        return;
+    }
+
+    _time_since_last_segment_received = 0;
+    if (seg.header().rst){
+        set_error_state();
+        return ;
+    }
+
+    _receiver.segment_received(seg);
+
+    if (_receiver.ackno().has_value() and (seg.length_in_sequence_space() == 0)
+        and seg.header().seqno == _receiver.ackno().value() - 1) {
+        _sender.send_empty_segment();
+        add_ackno_and_window_size();
+        return ;
+    }
+
+    if (seg.header().ack) {
+        _sender.ack_received(seg.header().ackno, seg.header().win);
+    }
+
+    _sender.fill_window();
+    bool sent_empty_segment = false;
+    if (_sender.segments_out().empty())
+        sent_empty_segment = true;
+    if (sent_empty_segment == true && seg.length_in_sequence_space() > 0) {
+        _sender.send_empty_segment();
+    }
+    add_ackno_and_window_size();
+
+    if (!_sender.stream_in().eof() && _receiver.stream_out().input_ended())
+        _linger_after_streams_finish = false;
+    if (TCPState::state_summary(_receiver) == TCPReceiverStateSummary::FIN_RECV &&
+        TCPState::state_summary(_sender) == TCPSenderStateSummary::FIN_ACKED && !_linger_after_streams_finish) {
+        _active = false;
+        return;
+    }
+}
 
 bool TCPConnection::active() const { return _active; }
 
@@ -34,7 +76,25 @@ size_t TCPConnection::write(const string &data) {
 }
 
 //! \param[in] ms_since_last_tick number of milliseconds since the last call to this method
-void TCPConnection::tick(const size_t ms_since_last_tick) { DUMMY_CODE(ms_since_last_tick); }
+void TCPConnection::tick(const size_t ms_since_last_tick) {
+    _time_since_last_segment_received += ms_since_last_tick;
+    _sender.tick(ms_since_last_tick);
+    add_ackno_and_window_size();
+    if (_sender.consecutive_retransmissions() > _cfg.MAX_RETX_ATTEMPTS) {
+        send_rst_segment();
+        set_error_state();
+        return;
+    }
+
+    // 对于处于 TIME_WAIT 状态，应该关闭
+    if (TCPState::state_summary(_receiver) == TCPReceiverStateSummary::FIN_RECV &&
+        TCPState::state_summary(_sender) == TCPSenderStateSummary::FIN_ACKED &&
+        _linger_after_streams_finish &&
+        _time_since_last_segment_received >= 10 * _cfg.rt_timeout) {
+        _active = false;
+        _linger_after_streams_finish = false;
+    }
+}
 
 //! \brief Shut down the outbound byte stream (still allows reading incoming data)
 void TCPConnection::end_input_stream() {
@@ -65,11 +125,31 @@ void TCPConnection::add_ackno_and_window_size() {
     }
 }
 
+void TCPConnection::send_rst_segment() {
+    // 确保前面没有在 sender 队列中的包
+    while (_segments_out.empty() == false)
+        _segments_out.pop();
+    _sender.send_empty_segment();
+    TCPSegment seg = _sender.segments_out().front();
+    _sender.segments_out().pop();
+    seg.header().rst = true;
+    _segments_out.push(seg);
+
+}
+
+void TCPConnection::set_error_state() {
+    _receiver.stream_out().set_error();
+    _sender.stream_in().set_error();
+    _linger_after_streams_finish = false;
+    _active = false;
+}
+
 TCPConnection::~TCPConnection() {
     try {
         if (active()) {
             cerr << "Warning: Unclean shutdown of TCPConnection\n";
-
+            send_rst_segment();
+            set_error_state();
             // Your code here: need to send a RST segment to the peer
         }
     } catch (const exception &e) {
