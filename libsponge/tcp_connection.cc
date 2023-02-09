@@ -20,13 +20,14 @@ size_t TCPConnection::unassembled_bytes() const { return _receiver.unassembled_b
 
 size_t TCPConnection::time_since_last_segment_received() const { return _time_since_last_segment_received; }
 
+// 一个很重要的点在于，我在 _sender 的 fill_window 函数中已经处理了 什么时候该发送 fin 或者 syn，因此这里无需再去进行处理
 void TCPConnection::segment_received(const TCPSegment &seg) {
+    // 如果没有建立连接，却收到了 syn 为 false 的包，则直接忽视，这样写是因为测试样例
     if (TCPState::state_summary(_receiver) == TCPReceiverStateSummary::LISTEN &&
         TCPState::state_summary(_sender) == TCPSenderStateSummary::CLOSED &&
         seg.header().syn == false) {
         return;
     }
-
     _time_since_last_segment_received = 0;
     if (seg.header().rst){
         set_error_state();
@@ -48,17 +49,20 @@ void TCPConnection::segment_received(const TCPSegment &seg) {
 
     _sender.fill_window();
     bool sent_empty_segment = false;
-    if (_sender.segments_out().empty())
+    if (_sender.segments_out().empty()) // 说明不能捎带确认，需要我们再发一个空的 ack 包
         sent_empty_segment = true;
     if (sent_empty_segment == true && seg.length_in_sequence_space() > 0) {
         _sender.send_empty_segment();
     }
     add_ackno_and_window_size();
 
+
     if (!_sender.stream_in().eof() && _receiver.stream_out().input_ended())
         _linger_after_streams_finish = false;
+    // 前三个条件都满足，即处于 TIME_WAIT 状态
     if (TCPState::state_summary(_receiver) == TCPReceiverStateSummary::FIN_RECV &&
-        TCPState::state_summary(_sender) == TCPSenderStateSummary::FIN_ACKED && !_linger_after_streams_finish) {
+        TCPState::state_summary(_sender) == TCPSenderStateSummary::FIN_ACKED &&
+        !_linger_after_streams_finish) {
         _active = false;
         return;
     }
@@ -79,6 +83,7 @@ size_t TCPConnection::write(const string &data) {
 void TCPConnection::tick(const size_t ms_since_last_tick) {
     _time_since_last_segment_received += ms_since_last_tick;
     _sender.tick(ms_since_last_tick);
+    // 在 _sender 调用了 tick 函数后，可能会重新发送一些包，因此必须进行处理
     add_ackno_and_window_size();
     if (_sender.consecutive_retransmissions() > _cfg.MAX_RETX_ATTEMPTS) {
         send_rst_segment();
@@ -112,6 +117,7 @@ void TCPConnection::connect() {
     add_ackno_and_window_size();
 }
 
+// 将 sender 发送队列的包取出，加上 ack 和 window size 并且放在 connection 的队列中
 void TCPConnection::add_ackno_and_window_size() {
     while (!_sender.segments_out().empty()) {
         TCPSegment seg = _sender.segments_out().front();
@@ -127,6 +133,8 @@ void TCPConnection::add_ackno_and_window_size() {
 
 void TCPConnection::send_rst_segment() {
     // 确保前面没有在 sender 队列中的包
+    // 不直接调用 add_ackno_and_window_size() 解决是因为已经发送 rst 了，因此前面的包也比较无关紧要了
+    // 而且，直接调用 add_ackno_and_window_size() 会出错
     while (_segments_out.empty() == false)
         _segments_out.pop();
     _sender.send_empty_segment();
