@@ -26,7 +26,9 @@ TCPSender::TCPSender(const size_t capacity, const uint16_t retx_timeout, const s
 uint64_t TCPSender::bytes_in_flight() const { return _next_seqno - _abs_ackno; }
 
 // 从 TCPReceiver 中可以看出，它的框架中，在一个 TCP Segment 中，如果 syn 为 true，这个 segment 也是可以带有数据的
-// TODO 这里很怪，再说吧？
+// fill_window 的作用是将 ByteStream 中的数据发送出去
+// 需要注意的是，fill_window() 也承担了发送 syn 和 fin 的任务，
+// 因此 fill_window 函数也需要对当前的状况进行判断，而后决定是否将相应的标志位设置为 set
 void TCPSender::fill_window() {
     if (_fin_flag == true)
         return ;
@@ -43,6 +45,7 @@ void TCPSender::fill_window() {
         _segments_out.push(seg);
         sent = true;
     }
+    // 第二个确认条件是为了保证还能放得下 FIN，毕竟 FIN 也是要占用一个 seqno 的
     if (_stream.eof() && _next_seqno - _abs_ackno < window_size){
         TCPSegment seg;
         seg.header().fin = true;
@@ -53,6 +56,7 @@ void TCPSender::fill_window() {
         _segments_out.push(seg);
         sent = true;
     }
+    // 第二个确认条件与上面同理
     while (!_stream.buffer_empty() && _abs_ackno + window_size > _next_seqno) {
         TCPSegment seg;
         seg.header().seqno = next_seqno();
@@ -69,6 +73,7 @@ void TCPSender::fill_window() {
         if (seg.header().fin)
             break;
     }
+    // 如果发送了，并且原来计时器没有启动则启动计时器
     if (_timer_flag == false && sent == true){
         _timer_flag = true;
         _timer = 0;
@@ -101,6 +106,7 @@ void TCPSender::ack_received(const WrappingInt32 ackno, const uint16_t window_si
         _consecutive_retransmissions = 0;
     }
     fill_window();
+    // 特别需要注意，这里需要判断计时器是否需要启动
     _timer_flag = !_segment_sent.empty();;
 }
 
@@ -109,11 +115,12 @@ void TCPSender::tick(const size_t ms_since_last_tick) {
     if (_syn_flag == false || _timer_flag == false)
         return ;
     _timer += ms_since_last_tick;
-    if (_timer >= _retransmission_timeout && _segment_sent.empty() == false){
+    if (_timer >= _retransmission_timeout){
         TCPSegment seg = _segment_sent.front().seg;
         _segments_out.push(seg);
         _timer = 0;
         // 我认为有可能是因为在接收端的 window size 为 0，因此没有接收，也没有收到 ack ，因此我们无需将 RTO * 2
+        // 这也从某种程度上解释了一开始的 window_size 是不能设置成 0 的
         if (_window_size > 0) {
             _retransmission_timeout = _retransmission_timeout * 2;
         }

@@ -20,16 +20,19 @@ long StreamReassembler::merge_node(block &t1, const block &t2) {
     if (t1.begin > t2.begin) {
         front = t2;
         back = t1;
-    } else {
+    }
+    else {
         front = t1;
         back = t2;
     }
     if (front.begin + front.data.length() < back.begin) {
         return -1;  // no intersection, couldn't merge
-    } else if (front.begin + front.data.length() >= back.begin + back.data.length()) {
+    }
+    else if (front.begin + front.data.length() >= back.begin + back.data.length()) {
         t1 = front;
         return back.data.length();
-    } else {
+    }
+    else {
         t1.begin = front.begin;
         t1.data = front.data + back.data.substr(front.begin + front.data.length() - back.begin);
         return front.begin + front.data.length() - back.begin;
@@ -47,6 +50,7 @@ void StreamReassembler::push_substring(const string &data, const size_t index, c
     }
     block node;
     if (index + data.length() <= _first_unassembled_index){
+        // 即使这个数据已经被接受了，但对方也有可能断开连接，因此这里需要我们判断一下是否要 end_input()
         if (_eof && empty()) {
             _output.end_input();
         }
@@ -60,8 +64,11 @@ void StreamReassembler::push_substring(const string &data, const size_t index, c
         node.begin = index;
         node.data = data;
     }
+    // 到此，上面已经将数据存到了 node 中
     _unassembled_byte += node.data.length();
     long merge_bytes;
+    // 需要特别注意的是 low_bound(key) 会返回第一个大于等于 key 的迭代器，
+    // 因此，下面的这个 while 实际上是在合并比当前 node 的 index 大的 node
     auto iter = _blocks.lower_bound(node);
     // 下面这里第二个判断条件应该是 大于等于0 ，因为两个 node 也可能相邻但并不相交
     while (iter != _blocks.end() && (merge_bytes = merge_node(node, *iter)) >= 0) {
@@ -70,7 +77,8 @@ void StreamReassembler::push_substring(const string &data, const size_t index, c
         iter = _blocks.lower_bound(node);
     }
     iter = _blocks.lower_bound(node);
-    if (iter != _blocks.begin()){ // 确保下面的操作不会发生错误
+    if (iter != _blocks.begin()){ // 确保下面的操作不会发生错误，
+                                  // 并且由于已经有了上面的合并，我们可以保证 node 不会和 _blocks.lower_bound(node); 需要合并
         iter--;
         // 这里不能有 iter != _blocks.begin() 这个判断条件，因为也有可能出现需要和 set 中第一个元素合并的情况
         while ((merge_bytes = merge_node(node, *iter)) >= 0){

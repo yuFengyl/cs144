@@ -18,6 +18,8 @@
 //! segments if the retransmission timer expires.
 class TCPSender {
   private:
+    // 这里用一个数据结构将 abs_seqno 保存起来是防止一段时间超时后重发时出现，从 seqno 解析到错误的 abs_seqno 的情况
+    // 虽然我也不知道会不会出现这种情况qwq
     struct sender_in_queue{
         TCPSegment seg;
         size_t abs_seqno;
@@ -56,7 +58,7 @@ class TCPSender {
     // 重传计时器
     unsigned int _timer{0};
 
-    // 接收方的窗口大小，这里初始化为 1 是 debug 出来的，具体我也不知道为啥
+    // 接收方的窗口大小，不能初始化为 0
     uint16_t _window_size{1};
 
     bool _syn_flag{false};

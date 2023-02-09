@@ -24,6 +24,7 @@ class TCPReceiver {
 
     WrappingInt32 _isn;
 
+    // 这里用了一个变量 _check_point 来方便每次 32 位 与 64 位之间的转化
     uint64_t _check_point;
 
   public:
