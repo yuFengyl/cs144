@@ -30,8 +30,11 @@ WrappingInt32 wrap(uint64_t n, WrappingInt32 isn) {
 uint64_t unwrap(WrappingInt32 n, WrappingInt32 isn, uint64_t checkpoint) {
     WrappingInt32 checkpointTemp = wrap(checkpoint, isn);
     int32_t diff = n - checkpointTemp;
+    // 相加规则: 先讲 diff 扩展成一个 64 位有符号数，然后再进行相加，最后将相加的结果替换成一个有符号数
     int64_t result = diff + checkpoint;
+    // diff < 0 但 checkpoint + diff > checkpoint （这里同样会将 diff 扩展成一个 64 位的有符号数），说明 diff 的绝对值是要大于 checkpoint 的
     if (diff < 0 && checkpoint + diff > checkpoint)
+        // 因此 n 和 checkpoint 可能并不属于同一个 WrappingInt32
         result = checkpoint + uint32_t(diff);
     return result;
 }
