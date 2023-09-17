@@ -80,10 +80,6 @@ void TCPSender::fill_window() {
     }
 }
 
-void TCPSender::send_segment(TCPSegment seg) {
-    DUMMY_CODE(seg);
-}
-
 //! \param ackno The remote receiver's ackno (acknowledgment number)
 //! \param window_size The remote receiver's advertised window size
 void TCPSender::ack_received(const WrappingInt32 ackno, const uint16_t window_size) {
